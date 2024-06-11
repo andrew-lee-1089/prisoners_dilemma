@@ -1,5 +1,5 @@
 use crate::common::{Player, Round, RoundChoice, StrategyType, BOTH_COOPERATE_ROUND};
-use rand::{Rng};
+use rand::Rng;
 
 pub fn always_cooperate_strategy(_rounds: &Vec<Round>) -> RoundChoice {
     RoundChoice::Cooperate

@@ -1,6 +1,7 @@
 use itertools::Itertools;
 use rand::{distributions::Alphanumeric, Rng};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
+use enum_derived::Rand;
 
 pub struct Player {
     pub name: String,
@@ -22,6 +23,12 @@ pub enum StrategyType {
     RarelyRelaliate,
 }
 
+impl fmt::Display for StrategyType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl Player {
     pub fn new(
         strategy_type: StrategyType,
@@ -41,14 +48,31 @@ impl Player {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+
+pub struct PrivateRound {
+    pub round: Round,
+    pub has_noise: bool,
+    pub round_with_noise: Round
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Round {
     pub choices: (RoundChoice, RoundChoice),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Rand)]
 pub enum RoundChoice {
     Cooperate,
     Steal,
+}
+
+impl RoundChoice {
+    pub fn get_opposite(&self) -> RoundChoice {
+        if self == &RoundChoice::Cooperate {
+            return RoundChoice::Steal;
+        }
+        RoundChoice::Cooperate
+    }
 }
 
 pub const BOTH_COOPERATE_ROUND: Round = Round {
@@ -64,22 +88,58 @@ pub const BOTH_STEAL_ROUND: Round = Round {
     choices: (RoundChoice::Steal, RoundChoice::Steal),
 };
 
-fn flip_round(round: &Round) -> Round {
-    match round {
-        &BOTH_COOPERATE_ROUND => BOTH_COOPERATE_ROUND,
-        &FIRST_PLAYER_STEALS_ROUND => SECOND_PLAYER_STEALS_ROUND,
-        &SECOND_PLAYER_STEALS_ROUND => FIRST_PLAYER_STEALS_ROUND,
-        &BOTH_STEAL_ROUND => BOTH_STEAL_ROUND,
+impl PrivateRound {
+    pub fn get_round_history(&self) -> Round {
+        if self.has_noise {
+            Round {
+                choices: (self.round.choices.0, self.round_with_noise.choices.1),
+            }
+        } else {
+            self.round
+        }
+    }
+
+    pub fn get_round_history_for_b(&self) -> Round {
+        if self.has_noise {
+            Round {
+                choices: (self.round.choices.1, self.round_with_noise.choices.0),
+            }
+        } else {
+            Round {
+                choices: (self.round.choices.1, self.round.choices.0),
+            }
+        }
     }
 }
 
-pub fn play_round(players: (&Player, &Player), rounds: &Vec<Round>) -> Round {
-    let flipped_rounds: Vec<Round> = rounds.iter().map(|round| flip_round(round)).collect();
-    Round {
-        choices: (
-            (players.0.strategy)(rounds),
-            (players.1.strategy)(&flipped_rounds),
-        ),
+pub fn play_round(
+    players: (&Player, &Player),
+    private_rounds: &Vec<PrivateRound>,
+    noise: i32,
+) -> PrivateRound {
+    PrivateRound {
+        round: Round {
+            choices: (
+                (players.0.strategy)(
+                    &private_rounds
+                        .iter()
+                        .map(|p| p.get_round_history())
+                        .collect(),
+                ),
+                (players.1.strategy)(
+                    &private_rounds
+                        .iter()
+                        .map(|p| p.get_round_history_for_b())
+                        .collect(),
+                ),
+            ),
+        },
+        has_noise: rand::thread_rng().gen_range(0..100) < noise,
+        round_with_noise: Round {
+            choices: (
+                RoundChoice::rand(), RoundChoice::rand()
+            )
+        }
     }
 }
 
@@ -92,25 +152,25 @@ fn round_outcome(round: &Round) -> (i32, i32) {
     }
 }
 
-pub fn get_scores(rounds: Vec<Round>) -> (i32, i32) {
+pub fn get_scores(rounds: Vec<PrivateRound>) -> (i32, i32) {
     rounds
         .iter()
-        .map(|round| round_outcome(round))
+        .map(|private_round| round_outcome(&private_round.round))
         .fold((0, 0), |(a, b), (c, d)| (a + c, b + d))
 }
 
-fn play_match(players: (&Player, &Player)) -> (i32, i32) {
-    let mut rounds: Vec<Round> = vec![];
+fn play_match(players: (&Player, &Player), noise: i32) -> (i32, i32) {
+    let mut rounds: Vec<PrivateRound> = vec![];
 
     for _i in 0..200 {
-        let round = play_round(players, &rounds);
+        let round = play_round(players, &rounds, noise);
         rounds.push(round);
     }
 
     get_scores(rounds)
 }
 
-pub fn play_season(players: &Vec<Player>) -> Vec<(&Player, f32)> {
+pub fn play_season(players: &Vec<Player>, noise: i32) -> Vec<(&Player, f32)> {
     let mut results: HashMap<String, Vec<i32>> = HashMap::new();
 
     for game in players
@@ -118,7 +178,7 @@ pub fn play_season(players: &Vec<Player>) -> Vec<(&Player, f32)> {
         .combinations_with_replacement(2)
         .map(|v| (v[0], v[1]))
     {
-        let result = play_match(game);
+        let result = play_match(game, noise);
         // println!(
         //     "{}: {}, {} {}",
         //     game.0.name, result.0, game.1.name, result.1
